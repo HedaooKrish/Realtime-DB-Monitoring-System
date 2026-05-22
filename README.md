@@ -91,8 +91,7 @@ Opens at `http://localhost:3000`
 ---
 ## UI
 
-!(/ui_page.png)
-
+![UI](ui_page.png)
 --
 ## API
 

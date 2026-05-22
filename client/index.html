@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ORDERS MONITORING DASHBOARD</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      padding: 2rem;
+      color: #1a1a1a;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+
+    h1 { font-size: 1.4rem; font-weight: 600; }
+
+    #ws-status {
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: 99px;
+      font-weight: 500;
+    }
+
+    .status-connected    { background: #d1fae5; color: #065f46; }
+    .status-disconnected { background: #fee2e2; color: #991b1b; }
+    .status-reconnecting { background: #fef3c7; color: #92400e; }
+
+    .table-wrapper {
+      background: white;
+      border-radius: 10px;
+      border: 1px solid #e5e5e5;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    thead { background: #fafafa; }
+
+    th {
+      text-align: left;
+      padding: 12px 16px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #f0f0f0;
+      transition: background 0.3s ease;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+
+    .badge-pending   { background: #fef3c7; color: #92400e; }
+    .badge-shipped   { background: #dbeafe; color: #1e40af; }
+    .badge-delivered { background: #d1fae5; color: #065f46; }
+
+    /* flash animations */
+    @keyframes flashGreen  { 0%,100% { background:#fff } 50% { background:#d1fae5 } }
+    @keyframes flashAmber  { 0%,100% { background:#fff } 50% { background:#fef3c7 } }
+    @keyframes flashRed    { 0%,100% { background:#fff } 50% { background:#fee2e2 } }
+
+    .flash-insert { animation: flashGreen 1s ease; }
+    .flash-update { animation: flashAmber 1s ease; }
+    .flash-delete { animation: flashRed   0.6s ease; }
+
+    #empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #999;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Orders Monitoring Dashboard</h1>
+    <span id="ws-status" class="status-disconnected">Disconnected</span>
+  </div>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Customer</th>
+          <th>Product</th>
+          <th>Status</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody id="orders-body">
+        <tr><td colspan="5" id="empty-state">Loading orders...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+  const tbody = document.getElementById('orders-body')
+  const wsStatus = document.getElementById('ws-status')
+
+  // ── helpers ──────────────────────────────────────────
+
+  function formatDate(dateStr) {
+    return new Date(dateStr).toLocaleString()
+  }
+
+  function badgeClass(status) {
+    return `badge badge-${status}`
+  }
+
+  function buildRow(order) {
+    const tr = document.createElement('tr')
+    tr.dataset.id = order._id
+    tr.innerHTML = `
+      <td>${order._id.slice(-6)}</td>
+      <td>${order.customer_name}</td>
+      <td>${order.product_name}</td>
+      <td><span class="${badgeClass(order.status)}">${order.status}</span></td>
+      <td>${formatDate(order.updated_at)}</td>
+    `
+    return tr
+  }
+
+  // ── initial load ──────────────────────────────────────
+
+  async function loadOrders() {
+    try {
+      const res = await fetch('/orders')
+      const orders = await res.json()
+
+      tbody.innerHTML = ''
+
+      if (orders.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" id="empty-state">No orders yet</td></tr>'
+        return
+      }
+
+      orders.forEach(order => tbody.appendChild(buildRow(order)))
+    } catch (err) {
+      console.error('Failed to load orders:', err)
+    }
+  }
+
+  // ── websocket event handlers ──────────────────────────
+
+  function handleInsert(data) {
+    // remove empty state row if present
+    const empty = document.getElementById('empty-state')
+    if (empty) empty.closest('tr').remove()
+
+    const tr = buildRow(data)
+    tr.classList.add('flash-insert')
+    tbody.prepend(tr)
+  }
+
+  function handleUpdate(data) {
+    const existing = tbody.querySelector(`tr[data-id="${data._id}"]`)
+    if (!existing) return
+
+    const newRow = buildRow(data)
+    newRow.classList.add('flash-update')
+    existing.replaceWith(newRow)
+  }
+
+  function handleDelete(data) {
+    const existing = tbody.querySelector(`tr[data-id="${data._id}"]`)
+    if (!existing) return
+
+    existing.classList.add('flash-delete')
+    setTimeout(() => existing.remove(), 600)
+  }
+
+  // ── websocket connection ──────────────────────────────
+
+  let ws
+  let reconnectTimer
+
+  function connectWS() {
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+    ws = new WebSocket(`${protocol}://${location.host}`)
+
+    ws.onopen = () => {
+      wsStatus.textContent = 'Connected'
+      wsStatus.className = 'status-connected'
+      clearTimeout(reconnectTimer)
+      console.log('WebSocket connected')
+    }
+
+    ws.onmessage = (event) => {
+      const payload = JSON.parse(event.data)
+      console.log('Received:', payload)
+
+      if (payload.operation === 'insert') handleInsert(payload.data)
+      if (payload.operation === 'update') handleUpdate(payload.data)
+      if (payload.operation === 'delete') handleDelete(payload.data)
+    }
+
+    ws.onclose = () => {
+      wsStatus.textContent = 'Reconnecting...'
+      wsStatus.className = 'status-reconnecting'
+      console.log('WebSocket closed — retrying in 3s')
+      reconnectTimer = setTimeout(connectWS, 3000)
+    }
+
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err)
+      ws.close()
+    }
+  }
+
+  // ── init ──────────────────────────────────────────────
+
+  loadOrders()
+  connectWS()
+</script>
+
+</body>
+</html>

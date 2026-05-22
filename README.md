@@ -46,9 +46,6 @@ realtime-orders/
 ├── .env.example
 └── README.md
 ```
-
-**Key separation:** `db.js` knows nothing about WebSockets. `wsManager.js` knows nothing about MongoDB. `index.js` connects them with one line — `watchOrders(broadcast)`.
-
 ---
 
 ## Running with Docker (recommended)
@@ -92,7 +89,11 @@ node server/index.js
 Opens at `http://localhost:3000`
 
 ---
+## UI
 
+!(/ui_page.png)
+
+--
 ## API
 
 | Method | Endpoint | Description |
